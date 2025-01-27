@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include "ports.h"
+#include <iostream>
 
 // declaro
 class PortScanner
@@ -18,6 +19,11 @@ public:
 
     void scan()
     {
+    
+        // Hilo para ejecutar el io_context
+        std::thread io_thread([this]()
+                              { io_context.run(); });
+
         std::vector<std::thread> threads;
         for (const auto &port : PORT_SERVICE_MAP)
         {
@@ -28,6 +34,9 @@ public:
         {
             t.join();
         }
+
+        io_context.stop(); // Detener el io_context
+        io_thread.join();  // Esperar a que termine el hilo del io_context
     }
 
     std::unordered_map<int, std::string> getOpenPorts() const
@@ -38,11 +47,6 @@ public:
     int getClosedPorts() const
     {
         return closedPorts;
-    }
-
-    std::string getOperatingSystemX() const
-    {
-        return operating_system;
     }
 
 private:
@@ -57,40 +61,47 @@ private:
     boost::asio::io_context io_context;
     boost::asio::ip::tcp::resolver resolver;
 
-    std::string getOperatingSystem()
-    {
-    }
-
     void scanPort(int port)
     {
-
         try
         {
-
             boost::asio::ip::tcp::socket socket(io_context);
             boost::asio::ip::tcp::endpoint endpoint(
                 boost::asio::ip::make_address(ip), port);
 
+          
+            boost::asio::deadline_timer timer(io_context);
+            timer.expires_from_now(boost::posix_time::seconds(10));
+
+            // Operación asíncrona para cancelar la conexión si hay timeout
+            bool connected = false;
+            timer.async_wait([&socket](const boost::system::error_code &ec)
+                             {
+                                 if (!ec)
+                                     socket.cancel(); // Cancela la conexión si el timer expira
+                             });
+
+            // Conexión asíncrona
             boost::system::error_code error;
-            socket.connect(endpoint, error);
+            socket.async_connect(endpoint, [&](const boost::system::error_code &ec)
+                                 {
+                                     if (!ec)
+                                         connected = true;
+                                     timer.cancel(); // Cancela el timer si la conexión se completa
+                                 });
 
-            if (!error)
+            // Ejecutar el io_context para procesar operaciones asíncronas
+            io_context.run();
+
+            if (connected)
             {
-                // bloquea la edicion del puerto mutex, asegura que sea
-                // desbloqueado al terminar la edicion
 
-                // el mutex hace que solo lo debajo de el se bloquee, hasta
-                // que salga del scope, osea, ya terminado
+
+                std::cout << "Port " << port << " is open" << std::endl;
+
+
                 std::lock_guard<std::mutex> lock(port_mutex);
-
-                // findea en el map el puerto que he escaneado
-
                 auto service = PORT_SERVICE_MAP.find(port);
-
-                // port service map es basicamente dentro del iterador,
-                // lo que significa que ha llegado al final. si es end, es que
-                // no lo ha encontrado, si no es end, es que ha salido guay
-                // y le dice que coja el segundo valor que es la valor asociado a la key
                 if (service != PORT_SERVICE_MAP.end())
                 {
                     open_ports[port] = service->second;
@@ -107,7 +118,7 @@ private:
         }
         catch (std::exception &e)
         {
-            ++closedPorts;
+            closedPorts++;
         }
     }
 };

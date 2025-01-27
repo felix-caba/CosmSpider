@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fstream>
 #include "Scanner.h"
+#include "Ports.h"
 
 std::vector<std::string> source_ips;
 std::unordered_map<std::string, std::vector<std::string>> dest_file;
@@ -19,7 +20,14 @@ int main(int argc, char **argv)
     int rank, n_ranks;
     int ips_per_rank;
 
-    MPI_Init(&argc, &argv);
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+    if (provided < MPI_THREAD_MULTIPLE)
+    {
+        std::cerr << "MPI no soporta multihilo!" << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &n_ranks);
 
@@ -39,7 +47,17 @@ int main(int argc, char **argv)
         }
     }
 
-    int num_ips = source_ips.size();
+    int num_ips = 0;
+    if (rank == 0)
+    {
+        num_ips = source_ips.size();
+    }
+    MPI_Bcast(&num_ips, 1, MPI_INT, 0, MPI_COMM_WORLD); // Todos reciben num_ips
+
+    // Redimensionar en todos los procesos
+    source_ips.resize(num_ips);
+
+    std::cout << "Number of IPs: " << num_ips << std::endl;
 
     if (rank != 0)
     {
@@ -84,8 +102,13 @@ int main(int argc, char **argv)
 
     // Process each IP with a rank
 
-    for (int i = rank * ips_per_rank; i < (rank * ips_per_rank) + ips_per_rank; i++)
+    int start = rank * ips_per_rank;
+    int end = (rank == n_ranks - 1) ? num_ips : (rank + 1) * ips_per_rank;
+
+    for (int i = start; i < end; i++)
     {
+
+        std::cout << "Scanning IP: " << source_ips[i] << " with rank: " << rank << std::endl;
 
         PortScanner scanner(source_ips[i]);
         scanner.scan();
@@ -104,6 +127,7 @@ int main(int argc, char **argv)
         std::string closed_ports_str = std::to_string(closed_ports);
 
         std::string result = open_ports_str + " " + closed_ports_str + " ";
+        
 
         dest_file[ip] = {result};
     }
@@ -144,4 +168,6 @@ int main(int argc, char **argv)
         }
         outfile.close();
     }
+    MPI_Finalize();
+    return 0;
 }
